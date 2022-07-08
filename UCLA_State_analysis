@@ -1,0 +1,365 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Jun  6 10:52:27 2022
+
+@author: alexesmerritt
+"""
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+import re
+import plotly.express as px
+import plotly 
+color=dict(boxes='purple', whiskers='purple', medians='pink', caps='purple')
+### List of dataframes: 
+    ##df: Is the orginial dataframe from the data cleaning set with a few changes + columns added below
+    ##df_rates: df data set with the rate of vaccination for states 
+    ##df_means: mean of the rates for each state in df_rates
+    ##df_slow: data frame for the the amount of days it took for the population
+###List of lists: 
+    ##states_wo_federal list of all states that we have data for
+    ##state_abbrevs list of states and their abbreviations
+    ##state_stop list of state along with the day when growth roughly stopped
+    ##prioritized_states list of the names of states that did prioritize incarcerated populations
+    ##not_prioritized list of name of states that did not prioritize incarcerated populations
+    ##bad_rate_states: states taht start at too high values to reasonably include in rate calculations
+    
+        
+file=open('/Users/alexesmerritt/Desktop/Prison Vaccinaiton Project/UCLA_statewide_temporal.csv')
+
+#Creating main data frame: correcting for date format and making sure NA values are removed
+df=pd.read_csv(file)
+df['Date']=pd.to_datetime(df['Date'], format="%Y-%m-%d")
+df = df[df['Mono.Initiated.Rate'].notna()]
+df.reset_index()
+df=df.drop('Unnamed: 0',axis=1)
+states=df['State'].unique()
+
+##Removing states that start at abnormally high 
+
+#Creating empty rows for rate of change aand days since last change
+df["Rate.Change"] = " "
+#df['Days_Since_last']=np.nan
+df['Differences']=np.nan
+
+bad_rate_states=[]
+for state in states: 
+    df_state=df.loc[df['State']==state]
+    xs=df_state.index.to_list()
+    first=xs[0]
+    start_rate=df_state['Mono.Initiated.Rate'][first]
+    if start_rate>0.5:
+        bad_rate_states.append(state)
+
+states=list(states)
+states_for_rates=[i for i in states if i not in bad_rate_states]
+
+df_concat=pd.DataFrame()
+for state in states: 
+    df_state=df.loc[df['State']==state]
+    df_state['Rate.Change'][0]=np.nan
+    df_state['Rate.Change'][1]=np.nan
+    ##Calculations for rate of change
+    df_state['Differences']=((np.log(df_state['Mono.Initiated.Rate']))-(np.log(df_state['Mono.Initiated.Rate'].shift(1))))
+    df_state['Days_since_last']=df_state['Days_since_last'].astype(float, errors = 'raise')
+    df_state['Rate.Change']=df_state['Differences']/(df_state['Days_since_last'])
+    df_concat= pd.concat([df_state,df_concat])
+
+df=df_concat
+
+values=[] ##empty list to store tuples for the mean and std for rate of change
+for state in states_for_rates: 
+    df_state=df.loc[df['State']==state]
+    df_state=df_state.loc[df_state['Days']<21]
+    mean=df_state['Rate.Change'].mean()
+    values.append((state,mean))    
+       
+ 
+
+statesonly=states
+statesonly.remove('Federal')
+
+##Creating a fucntion to match states to their abbreviations
+states_abbrevs = {'AK':'Alaska','AL':'Alabama','AR':'Arkansas','AZ':'Arizona', 'CA':'California','CO':'Colorado',
+    'CT':'Connecticut','DC':'District of Columbia','DE':'Delaware','FL':'Florida','GA':'Georgia',
+    'HI':'Hawaii','IA':'Iowa','ID':'Idaho','IL':'Illinois','IN':'Indiana','KS':'Kansas','KY':'Kentucky','LA':'Louisiana',
+    'MA':'Massachusetts','MD':'Maryland','ME':'Maine','MI':'Michigan','MN':'Minnesota','MO':'Missouri','MS':'Mississippi',
+    'MT':'Montana','NC':'North Carolina','ND':'North Dakota','NE':'Nebraska','NH':'New Hampshire','NJ':'New Jersey',
+    'NM':'New Mexico','NV':'Nevada','NY':'New York','OH':'Ohio','OK':'Oklahoma','OR':'Oregon','PA':'Pennsylvania',
+    'RI':'Rhode Island','SC':'South Carolina','SD':'South Dakota','TN':'Tennessee','TX':'Texas','UT':'Utah',
+    'VA':'Virginia','VT':'Vermont','WA':'Washington','WI':'Wisconsin','WV':'West Virginia','WY':'Wyoming'}
+
+
+def best_match(x):
+    if len(x) == 2: # Try another way for 2-letter codes
+        for a,n in states_abbrevs.items():
+            if len(n.split()) == 2:
+                if "".join([c[0] for c in n.split()]).lower() == x.lower():
+                    return a.lower()
+    new_rx = re.compile(r"\w*".join([ch for ch in x]), re.I)
+    for a,n in states_abbrevs.items():
+        if new_rx.match(n):
+            return a.upper()
+     
+#Creating a dataframe for each stat
+df_means = pd.DataFrame(values, columns=['State','Rate_change_mean_perday'])
+df_means['Rate_change_mean_perweek']=df_means['Rate_change_mean_perday']*7
+
+
+
+df_means=df_means.loc[df_means['State'].isin(statesonly)]
+df_means['state_code'] = df_means['State'].apply(lambda x: best_match(x))
+
+fig = px.choropleth(df_means,
+                    locations='state_code',
+                    color='Rate_change_mean_perweek',
+                    color_continuous_scale="magma",
+                    locationmode='USA-states',
+                    scope='usa')
+fig.layout.coloraxis.colorbar.title = 'Initial Vaccination Rate Per Week'
+fig.update_layout(margin=dict(l=60, r=60, t=50, b=50))
+fig.show()
+plotly.offline.plot(fig, filename='state_level_analysis/chlotpleth_incar_vacc_rate.html')        
+fig.write_image("Rate_of_vaccination.jpg")
+
+
+
+
+def all_5_list_values(list1,lower,upper): 
+    if lower<list1[0]<upper:
+        if lower<list1[1]<upper:
+            if lower<list1[2]<upper:
+                if lower<list1[3]<upper:
+                    if lower<list1[4]<upper:
+                        if lower<list1[5]<upper:
+                            return True
+
+state_stop=[]
+for state in states:## for every state in the data set
+    df_state=df.loc[df['State']==state] ##Create data for just that state
+    index_list=df_state.index.values.tolist() ##Create a list of the indexes for the dataframe 
+    true_for_state=[] #Create an empty list to store all the index values for which the this state meets the requirements
+    for value in range(0,(len(index_list)-6)):##for every value
+        next_ten=index_list[value:value+6] ##the index value and the following 
+        next_ten_values=list(df_state['Rate.Change'][next_ten])
+        if all_5_list_values(next_ten_values,0,0.01)==True:
+            index=index_list[value]
+            true_for_state.append(index)
+    if len(true_for_state) >0:
+        first=true_for_state[0]
+        ##fix follwoing line
+        day=df_state['Days'][first]
+        state_stop.append([state,day])
+            
+##boxplots comparing rates         
+df_prioritized=df.loc[df['Prioritization?']=='yes']
+prioritized_states=df_prioritized['State'].unique()
+df_not_prioritized= df.loc[df['Prioritization?']=='no']
+not_prioritized=df_not_prioritized['State'].unique()
+        
+df_prioritized_means=df_means.loc[df_means['State'].isin(prioritized_states)]
+df_not_prioritized_means= df_means.loc[df_means['State'].isin(not_prioritized)]
+
+
+fig, axs = plt.subplots(1,4,figsize = (40,10))
+#fig.suptitle('Comparison of Incarcerated VaccinaionMetrics between States that Prioritized Incarcerated populations and those that did not')
+
+
+
+df_rates=df_means
+p_rates=list(df_prioritized_means['Rate_change_mean_perweek'])
+np_rates=list(df_not_prioritized_means['Rate_change_mean_perweek'])
+diff=len(p_rates)-len(np_rates)
+for x in range(0,diff):
+    np_rates.append(np.nan)
+
+df_rates2=pd.DataFrame(list(zip(p_rates,np_rates)),columns=['Prioritized Incarcerated','Not Prioritized Incarcerated'])
+bplot=df_rates2.boxplot(column=['Prioritized Incarcerated','Not Prioritized Incarcerated'],ax=axs[0],color=color)
+bplot.set_ylabel('Initial Vaccination Rate')
+  
+
+
+
+
+
+df_slow=pd.DataFrame(state_stop,columns=['State','Slow_date'])      
+df_prioritized_slow=df_slow.loc[df_slow['State'].isin(prioritized_states)]
+df_not_prioritized_slow= df_slow.loc[df_slow['State'].isin(not_prioritized)]
+
+
+p_slow=list(df_prioritized_slow['Slow_date'])
+np_slow=list(df_not_prioritized_slow['Slow_date'])
+diff=len(p_slow)-len(np_slow)
+for x in range(0,diff):
+    np_slow.append(np.nan)
+
+df_slow2=pd.DataFrame(list(zip(p_slow,np_slow)),columns=['Prioritized Incarcerated','Not Prioritized Incarcerated'])
+bplot=df_slow2.boxplot(column=['Prioritized Incarcerated','Not Prioritized Incarcerated'],ax=axs[1],color=color)
+bplot.set_ylabel('Days to Saturation') ##needs better title
+
+
+
+
+df['Date']=pd.to_datetime(df['Date'], format="%Y-%m-%d") 
+p_december=[]      
+np_december=[] 
+december=[]
+for state in states: 
+    df_state=df.loc[df['State']==state]
+    df_state_12=df_state.loc[df_state['Date'].dt.month==12]
+    df_state_12=df_state_12.loc[df_state_12['Date'].dt.year==2021]
+    print(state,df_state_12['Date'].unique())
+    index_list=df_state_12.index.values.tolist() ##Create a list of the indexes for the dataframe 
+    if len(index_list)>0:
+        first=index_list[0]
+    
+        december_value=df_state_12['Mono.Initiated.Rate'][first]
+        december.append([state,december_value]) 
+      
+        if state in prioritized_states: 
+            p_december.append(december_value)
+        if state in not_prioritized: 
+            np_december.append(december_value)
+df_december=pd.DataFrame(december,columns=['State','Coverage_december'])
+df_december['state_code'] = df_december['State'].apply(lambda x: best_match(x))
+
+diff=len(p_december)-len(np_december)
+for x in range(0,diff):
+    np_december.append(np.nan)
+df_december2=pd.DataFrame(list(zip(p_december,np_december)),columns=['Prioritized Incarcerated','Not Prioritized Incarcerated'])
+bplot=df_december2.boxplot(column=['Prioritized Incarcerated','Not Prioritized Incarcerated'],ax=axs[2],color=color)
+bplot.set_ylabel('Coverage for Early December') ##needs better title
+df_december_0=df_december
+
+
+
+
+##second columns 
+populations=pd.Series(df['Population_Dec2021'].unique())
+df_prioritized=df.loc[df['Prioritization?']=='yes']
+prior_before=[]
+prior_during=[]
+phase_1=[]
+phase_1A=[]
+phase_1B=[]
+phase_1C=[]
+phase_2=[]
+
+for state in df_prioritized['State'].unique():  
+    df_state=df_prioritized.loc[df_prioritized['State']==state]
+    phases=list(df_state['Phase_state'].unique())
+    phase = phases[0]
+    if phase =='1':
+        phase_1.append(state)
+    if phase=='1A':
+        phase_1A.append(state)
+    if phase=='1B':
+        phase_1B.append(state)
+    if phase=='1C':
+        phase_1C.append(state)
+    if phase=='2':
+        phase_2.append(state)
+
+    dates=list(df_state['Date'])
+    start_date=pd.to_datetime(dates[0])
+    prior_date=pd.to_datetime(list(df_state['Date_prioritized'])[0])
+    if start_date<prior_date:
+        prior_before.append(state)
+    if start_date>prior_date:
+        prior_during.append(state)
+
+
+
+
+
+
+
+
+    
+file_state=open('/Users/alexesmerritt/Downloads/data_county_timeseries.csv') 
+df_noninc=pd.read_csv(file_state)
+df_noninc=df_noninc.loc[df_noninc['CASE_TYPE']=='Partial']  
+df_noninc=df_noninc.loc[df_noninc['WEEK']==48] 
+df_noninc=df_noninc.loc[df_noninc['YEAR']==2021]
+
+df_new_december=pd.DataFrame()
+df_december['non_inc_coverage']=''
+for state in df_december['state_code'].unique(): 
+    df_state_noninc=df_noninc.loc[df_noninc['STATE_NAME']==state]
+    ppl_vacc=df_state_noninc['CASES'].sum()
+    popn=df_state_noninc['POPN'].sum()
+    state_coverage_non_inc=ppl_vacc/popn
+    df_state_december=df_december.loc[df_december['state_code']==state]
+    df_state_december['non_inc_coverage']=state_coverage_non_inc
+    df_new_december=pd.concat([df_new_december,df_state_december])
+
+
+df_december=df_new_december
+df_december['diff_in_coverage']=df_december['Coverage_december']-df_december['non_inc_coverage'] 
+p_december=[]
+np_december=[]
+for state in df_december['State'].unique():
+    df_state=df_december.loc[df_december['State']==state]
+    
+    december_value=list(df_state['diff_in_coverage'])[0]
+    if state in prioritized_states: 
+        p_december.append(december_value)
+    if state in not_prioritized: 
+        np_december.append(december_value)
+
+diff=len(p_december)-len(np_december)
+for x in range(0,diff):
+    np_december.append(np.nan)
+df_december2=pd.DataFrame(list(zip(p_december,np_december)),columns=['Prioritized Incarcerated','Not Prioritized Incarcerated'])
+bplot=df_december2.boxplot(column=['Prioritized Incarcerated','Not Prioritized Incarcerated'],ax=axs[3],color=color)
+bplot.set_ylabel('Difference in Coverage for Nonincarcerated') ##needs better title
+
+plt.savefig('Covid_incarcerated_boxplots.jpg') 
+
+fig = px.choropleth(df_december,
+                    locations='state_code',
+                    color='diff_in_coverage',
+                    color_continuous_scale="magma",
+                    locationmode='USA-states',
+                    scope='usa')
+fig.layout.coloraxis.colorbar.title = 'Difference in Coverage in December'
+fig.update_layout(margin=dict(l=60, r=60, t=50, b=50))
+fig.show()
+plotly.offline.plot(fig, filename='state_level_analysis/chloropleth_diff.html')        
+fig.write_image("chloropleth_diff.jpg")
+
+
+
+   
+pd.set_option('display.max_columns', None)
+pd.set_option('display.max_rows', None)    
+df_december=df_december.sort_values(by='diff_in_coverage', axis=0)
+
+
+
+
+df_slow['state_code'] = df_slow['State'].apply(lambda x: best_match(x))
+
+fig = px.choropleth(df_slow,
+                    locations='state_code',
+                    color='Slow_date',
+                    color_continuous_scale="magma",
+                    locationmode='USA-states',
+                    scope='usa')
+fig.layout.coloraxis.colorbar.title ='Days to Saturation'
+fig.show()
+plotly.offline.plot(fig, filename='state_level_analysis/chloropleth_saturation.html')    
+fig.write_image("chloropleth_saturation.jpg")
+                
+fig = px.choropleth(df_december,
+                    locations='state_code',
+                    color='Coverage_december',
+                    color_continuous_scale="magma",
+                    locationmode='USA-states',
+                    scope='usa')
+fig.layout.coloraxis.colorbar.title = 'Coverage in December 2021'
+fig.update_layout(margin=dict(l=60, r=60, t=50, b=50))
+fig.show()
+plotly.offline.plot(fig, filename='state_level_analysis/chloropleth_dec.html')        
+fig.write_image("chloropleth_dec.jpg")
